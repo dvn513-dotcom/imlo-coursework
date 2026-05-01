@@ -5,18 +5,13 @@ train.py - Train the PetClassifier from scratch on the Oxford-IIIT Pet
 Usage:
     python train.py
 
-No command-line arguments are required. Hyperparameters are defined as
-module-level constants below.
-
 Key choices:
     * Architecture: custom ResNet-18-style network (see model.py).
     * Loss: CrossEntropyLoss with label smoothing 0.1.
-    * Regularisation: Mixup (alpha=0.2) applied per batch in the training loop.
+    * Regularisation: Mixup (alpha=0.1) - reduced from 0.2 to ease training.
     * Optimiser: SGD with Nesterov momentum 0.9, weight decay 5e-4.
     * Schedule: 5-epoch linear warmup followed by 25-epoch cosine decay.
-    * Augmentation: RandomResizedCrop, RandomHorizontalFlip,
-      TrivialAugmentWide, RandomErasing - all PyTorch built-ins.
-    * Training data: full official 'trainval' split (no validation split).
+    * LR reduced from 0.1 to 0.03 since 0.1 was unstable for this dataset size.
 """
 
 import random
@@ -44,12 +39,12 @@ torch.cuda.manual_seed_all(SEED)
 # ---------------------------------------------------------------------
 EPOCHS           = 30
 BATCH_SIZE       = 64
-INITIAL_LR       = 0.1
+INITIAL_LR       = 0.03      # reduced from 0.1
 MOMENTUM         = 0.9
 WEIGHT_DECAY     = 5e-4
 WARMUP_EPOCHS    = 5
 LABEL_SMOOTHING  = 0.1
-MIXUP_ALPHA      = 0.2
+MIXUP_ALPHA      = 0.1       # reduced from 0.2
 NUM_CLASSES      = 37
 IMG_SIZE         = 224
 NUM_WORKERS      = 4
@@ -65,7 +60,6 @@ MODEL_PATH = 'pet_classifier.pth'
 # Data
 # ---------------------------------------------------------------------
 def build_train_loader() -> DataLoader:
-    """Build the training DataLoader with the augmentation pipeline."""
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(IMG_SIZE, scale=(0.6, 1.0)),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -96,8 +90,6 @@ def build_train_loader() -> DataLoader:
 
 
 def build_eval_train_loader() -> DataLoader:
-    """A non-augmented loader over the trainval split for measuring final
-    training-set accuracy."""
     eval_transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
@@ -124,11 +116,6 @@ def build_eval_train_loader() -> DataLoader:
 # Mixup
 # ---------------------------------------------------------------------
 def mixup_batch(images: torch.Tensor, labels: torch.Tensor, alpha: float):
-    """Apply Mixup to a batch.
-
-    Returns (mixed_images, labels_a, labels_b, lam) such that the loss
-    should be: lam * loss(pred, labels_a) + (1 - lam) * loss(pred, labels_b).
-    """
     if alpha <= 0.0:
         return images, labels, labels, 1.0
     lam = float(np.random.beta(alpha, alpha))
@@ -221,7 +208,6 @@ def main():
         print(f'Epoch {epoch + 1:02d}/{EPOCHS} | lr={current_lr:.4f} '
               f'| loss={avg_loss:.4f} | approx-train-acc={approx_acc:.2f}%')
 
-    # Final clean training-set accuracy (no augmentation, no mixup)
     final_train_acc = evaluate(model, eval_train_loader)
     print(f'\nFinal training-set accuracy (un-augmented): {final_train_acc:.2f}%')
 
