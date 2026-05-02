@@ -68,9 +68,13 @@ class PetClassifier(nn.Module):
         stage 2: 2 x BasicBlock, 128 channels, output  28 x 28
         stage 3: 2 x BasicBlock, 256 channels, output  14 x 14
         stage 4: 2 x BasicBlock, 512 channels, output   7 x  7
+
+    A small dropout layer is applied to the pooled features before the
+    classifier as an extra regulariser (helps reduce overfitting on a
+    small dataset with high model capacity).
     """
 
-    def __init__(self, num_classes: int = 37):
+    def __init__(self, num_classes: int = 37, dropout_p: float = 0.2):
         super().__init__()
 
         # Stem: aggressive downsampling to reach 56x56 spatial size quickly.
@@ -87,8 +91,9 @@ class PetClassifier(nn.Module):
         self.stage_three = self._make_stage(in_ch=128, out_ch=256, blocks=2, first_stride=2)
         self.stage_four  = self._make_stage(in_ch=256, out_ch=512, blocks=2, first_stride=2)
 
-        # Head: global average pool + linear classifier.
+        # Head: global average pool, dropout, then linear classifier.
         self.gap = nn.AdaptiveAvgPool2d(1)
+        self.dropout = nn.Dropout(p=dropout_p)
         self.classifier = nn.Linear(512, num_classes)
 
         self._init_weights()
@@ -119,6 +124,7 @@ class PetClassifier(nn.Module):
         x = self.stage_three(x)
         x = self.stage_four(x)
         x = self.gap(x).flatten(1)
+        x = self.dropout(x)
         return self.classifier(x)
 
 
