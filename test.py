@@ -28,7 +28,7 @@ from model import PetClassifier
 BATCH_SIZE  = 64
 NUM_CLASSES = 37
 IMG_SIZE    = 224
-NUM_WORKERS = 4
+NUM_WORKERS = 0
 MODEL_PATH  = 'pet_classifier.pth'
 
 # Must match the normalisation used during training.
@@ -73,7 +73,7 @@ def main():
         batch_size=BATCH_SIZE,
         shuffle=False,
         num_workers=NUM_WORKERS,
-        pin_memory=True,
+        pin_memory=False,
     )
     print(f'Test images: {len(test_set)}')
 
