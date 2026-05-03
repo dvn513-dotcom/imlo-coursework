@@ -5,11 +5,10 @@ train.py - Train the PetClassifier from scratch on the Oxford-IIIT Pet
 Usage:
     python train.py
 
-No command-line arguments are required.
-
-Recipe (CPU-friendly):
-    * Architecture: custom ResNet-18-style network (see model.py).
-    * Loss: standard CrossEntropyLoss.
+Recipe:
+    * Architecture: custom ResNet-18-style network with dropout (see model.py).
+    * Loss: CrossEntropyLoss with label smoothing 0.1.
+    * Regularisation: light Mixup (alpha=0.1) per batch.
     * Optimiser: AdamW (lr=1e-3, weight_decay=1e-4).
     * Schedule: 3-epoch linear warmup then cosine decay over the
       remaining 27 epochs.
@@ -41,14 +40,16 @@ torch.cuda.manual_seed_all(SEED)
 # ---------------------------------------------------------------------
 # Hyperparameters
 # ---------------------------------------------------------------------
-EPOCHS         = 30
-BATCH_SIZE     = 64
-INITIAL_LR     = 1e-3
-WEIGHT_DECAY   = 1e-4
-WARMUP_EPOCHS  = 3
-NUM_CLASSES    = 37
-IMG_SIZE       = 224
-NUM_WORKERS    = 0
+EPOCHS           = 30
+BATCH_SIZE       = 64
+INITIAL_LR       = 1e-3
+WEIGHT_DECAY     = 1e-4
+WARMUP_EPOCHS    = 3
+LABEL_SMOOTHING  = 0.1
+MIXUP_ALPHA      = 0.1
+NUM_CLASSES      = 37
+IMG_SIZE         = 224
+NUM_WORKERS      = 0
 
 IMG_MEAN = [0.485, 0.456, 0.406]
 IMG_STD  = [0.229, 0.224, 0.225]
@@ -112,6 +113,23 @@ def build_eval_train_loader():
 
 
 # ---------------------------------------------------------------------
+# Mixup
+# ---------------------------------------------------------------------
+def mixup_batch(images: torch.Tensor, labels: torch.Tensor, alpha: float):
+    """Apply Mixup to a batch.
+
+    Returns (mixed_images, labels_a, labels_b, lam) such that the loss
+    should be: lam * loss(pred, labels_a) + (1 - lam) * loss(pred, labels_b).
+    """
+    if alpha <= 0.0:
+        return images, labels, labels, 1.0
+    lam = float(np.random.beta(alpha, alpha))
+    perm = torch.randperm(images.size(0), device=images.device)
+    mixed = lam * images + (1.0 - lam) * images[perm]
+    return mixed, labels, labels[perm], lam
+
+
+# ---------------------------------------------------------------------
 # Scheduler: linear warmup then cosine decay
 # ---------------------------------------------------------------------
 def make_scheduler(optimizer, total_epochs: int, warmup_epochs: int):
@@ -144,6 +162,9 @@ def evaluate(model: nn.Module, loader: DataLoader) -> float:
 # Main training loop
 # ---------------------------------------------------------------------
 def main():
+    print('=' * 60)
+    print('Training PetClassifier on Oxford-IIIT Pet')
+    print('=' * 60)
     print(f'Device: {DEVICE}')
 
     train_loader, train_set = build_train_loader()
@@ -152,8 +173,9 @@ def main():
 
     model = PetClassifier(num_classes=NUM_CLASSES).to(DEVICE)
     print(f'Total trainable parameters: {count_parameters(model):,}')
+    print('-' * 60)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=INITIAL_LR,
@@ -164,15 +186,16 @@ def main():
     for epoch in range(EPOCHS):
         model.train()
         running_loss = 0.0
-        running_correct = 0
+        running_correct = 0.0
         running_total = 0
 
         for images, labels in train_loader:
             images = images.to(DEVICE, non_blocking=True)
             labels = labels.to(DEVICE, non_blocking=True)
 
-            logits = model(images)
-            loss = criterion(logits, labels)
+            mixed, y_a, y_b, lam = mixup_batch(images, labels, MIXUP_ALPHA)
+            logits = model(mixed)
+            loss = lam * criterion(logits, y_a) + (1.0 - lam) * criterion(logits, y_b)
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -180,23 +203,25 @@ def main():
 
             preds = logits.argmax(dim=1)
             running_loss += loss.item() * labels.size(0)
-            running_correct += (preds == labels).sum().item()
+            running_correct += (lam * (preds == y_a).sum().item()
+                                + (1.0 - lam) * (preds == y_b).sum().item())
             running_total += labels.size(0)
 
         scheduler.step()
 
         avg_loss = running_loss / max(1, running_total)
-        train_acc = 100.0 * running_correct / max(1, running_total)
+        approx_acc = 100.0 * running_correct / max(1, running_total)
         current_lr = optimizer.param_groups[0]['lr']
         print(f'Epoch {epoch + 1:02d}/{EPOCHS} | lr={current_lr:.5f} '
-              f'| loss={avg_loss:.4f} | train-acc={train_acc:.2f}%')
+              f'| loss={avg_loss:.4f} | approx-train-acc={approx_acc:.2f}%')
 
-    # Final clean training-set accuracy (no augmentation)
+    print('-' * 60)
     final_train_acc = evaluate(model, eval_train_loader)
-    print(f'\nFinal training-set accuracy (un-augmented): {final_train_acc:.2f}%')
+    print(f'Final training-set accuracy (un-augmented): {final_train_acc:.2f}%')
 
     torch.save(model.state_dict(), MODEL_PATH)
     print(f'Saved trained model weights to "{MODEL_PATH}".')
+    print('=' * 60)
 
 
 if __name__ == '__main__':
