@@ -1,20 +1,6 @@
-"""
-train.py - Train the PetClassifier from scratch on the Oxford-IIIT Pet
-'trainval' split.
+"""Train PetClassifier on the Oxford-IIIT Pet trainval split.
 
-Usage:
-    python train.py
-
-Recipe:
-    * Architecture: custom ResNet-18-style network with dropout (see model.py).
-    * Loss: CrossEntropyLoss with label smoothing 0.1.
-    * Regularisation: light Mixup (alpha=0.1) per batch.
-    * Optimiser: AdamW (lr=1e-3, weight_decay=1e-4).
-    * Schedule: 3-epoch linear warmup then cosine decay over the
-      remaining 27 epochs.
-    * Augmentation: RandomResizedCrop, RandomHorizontalFlip,
-      ColorJitter - all PyTorch built-ins.
-    * Training data: full official 'trainval' split (no validation split).
+Usage: python train.py
 """
 
 import random
@@ -28,18 +14,14 @@ from torchvision.datasets import OxfordIIITPet
 from model import PetClassifier, count_parameters
 
 
-# ---------------------------------------------------------------------
-# Reproducibility
-# ---------------------------------------------------------------------
+# seeds
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
 
-# ---------------------------------------------------------------------
-# Hyperparameters
-# ---------------------------------------------------------------------
+# hyperparameters
 EPOCHS           = 30
 BATCH_SIZE       = 64
 INITIAL_LR       = 1e-3
@@ -58,9 +40,6 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 MODEL_PATH = 'pet_classifier.pth'
 
 
-# ---------------------------------------------------------------------
-# Data
-# ---------------------------------------------------------------------
 def build_train_loader():
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(IMG_SIZE, scale=(0.6, 1.0)),
@@ -90,6 +69,7 @@ def build_train_loader():
 
 
 def build_eval_train_loader():
+    # un-augmented loader for the final training-set accuracy measurement
     eval_transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
@@ -102,25 +82,12 @@ def build_eval_train_loader():
         transform=eval_transform,
         download=False,
     )
-    eval_loader = DataLoader(
-        eval_set,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=False,
-    )
-    return eval_loader
+    return DataLoader(eval_set, batch_size=BATCH_SIZE, shuffle=False,
+                      num_workers=NUM_WORKERS, pin_memory=False)
 
 
-# ---------------------------------------------------------------------
-# Mixup
-# ---------------------------------------------------------------------
-def mixup_batch(images: torch.Tensor, labels: torch.Tensor, alpha: float):
-    """Apply Mixup to a batch.
-
-    Returns (mixed_images, labels_a, labels_b, lam) such that the loss
-    should be: lam * loss(pred, labels_a) + (1 - lam) * loss(pred, labels_b).
-    """
+def mixup_batch(images, labels, alpha):
+    """Mix images linearly with weight lam ~ Beta(alpha, alpha)."""
     if alpha <= 0.0:
         return images, labels, labels, 1.0
     lam = float(np.random.beta(alpha, alpha))
@@ -129,11 +96,9 @@ def mixup_batch(images: torch.Tensor, labels: torch.Tensor, alpha: float):
     return mixed, labels, labels[perm], lam
 
 
-# ---------------------------------------------------------------------
-# Scheduler: linear warmup then cosine decay
-# ---------------------------------------------------------------------
-def make_scheduler(optimizer, total_epochs: int, warmup_epochs: int):
-    def lr_factor(epoch: int) -> float:
+def make_scheduler(optimizer, total_epochs, warmup_epochs):
+    # linear warmup, then cosine decay
+    def lr_factor(epoch):
         if epoch < warmup_epochs:
             return float(epoch + 1) / max(1, warmup_epochs)
         progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
@@ -141,26 +106,20 @@ def make_scheduler(optimizer, total_epochs: int, warmup_epochs: int):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_factor)
 
 
-# ---------------------------------------------------------------------
-# Evaluation
-# ---------------------------------------------------------------------
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader) -> float:
+def evaluate(model, loader):
     model.eval()
     correct = 0
     total = 0
     for images, labels in loader:
-        images = images.to(DEVICE, non_blocking=True)
-        labels = labels.to(DEVICE, non_blocking=True)
+        images = images.to(DEVICE)
+        labels = labels.to(DEVICE)
         preds = model(images).argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += labels.size(0)
     return 100.0 * correct / total
 
 
-# ---------------------------------------------------------------------
-# Main training loop
-# ---------------------------------------------------------------------
 def main():
     print('=' * 60)
     print('Training PetClassifier on Oxford-IIIT Pet')
@@ -176,11 +135,8 @@ def main():
     print('-' * 60)
 
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=INITIAL_LR,
-        weight_decay=WEIGHT_DECAY,
-    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=INITIAL_LR,
+                                  weight_decay=WEIGHT_DECAY)
     scheduler = make_scheduler(optimizer, EPOCHS, WARMUP_EPOCHS)
 
     for epoch in range(EPOCHS):
@@ -190,8 +146,8 @@ def main():
         running_total = 0
 
         for images, labels in train_loader:
-            images = images.to(DEVICE, non_blocking=True)
-            labels = labels.to(DEVICE, non_blocking=True)
+            images = images.to(DEVICE)
+            labels = labels.to(DEVICE)
 
             mixed, y_a, y_b, lam = mixup_batch(images, labels, MIXUP_ALPHA)
             logits = model(mixed)
